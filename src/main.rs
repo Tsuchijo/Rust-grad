@@ -1,11 +1,14 @@
+extern crate ndarray;
 use ndarray::{Array, Array2};
-use ndarray_rand::RandomExt;
-use rand::{prelude::*, distributions::Standard};
 
+#[derive(Debug)]
+#[derive(Clone)]
 enum Activation{
     Relu
 }
 
+#[derive(Debug)]
+#[derive(Clone)]
 struct Layer {
     weights : ndarray::Array2<f64>,
     bias : ndarray::Array1<f64>,
@@ -16,7 +19,8 @@ struct Layer {
 }
 
 struct Loss { 
-    derivative : ndarray::Array1<f64>
+    derivative : ndarray::Array1<f64>,
+    loss : f64
 }
 
 struct NeuralNetwork{
@@ -60,13 +64,19 @@ impl Layer {
         }
     }
 
-    fn compute_delta_final(&mut self, loss : Loss){
-        self.delta = self.hidden.mapv(Layer::relu_d) * loss.derivative;
+    fn compute_delta_final(&mut self, loss : &Loss){
+        self.delta = self.hidden.mapv(Layer::relu_d) * &loss.derivative;
     }
 
     fn backprop(&mut self, lr : &f64){
-        self.weights = &self.weights - self.delta.dot(&self.input.t()) * lr;
-        //self.bias = &self.bias - ((&self.delta) * lr);
+        let mut update_matrix: ndarray::Array2<f64> = Array::zeros((self.delta.len(), self.input.len()));
+        for (i, delta) in self.delta.iter().enumerate() {
+            for (j, input) in self.input.iter().enumerate() {
+                update_matrix[[i, j]] = delta * input;
+            }
+        }
+        self.weights += - (update_matrix);
+        //self.bias = self.bias - (self.delta);
     }
 
     // init a layer with random weights and bias
@@ -84,55 +94,71 @@ impl Layer {
 }
 
 impl NeuralNetwork {
-    fn forward(&mut self, input : &ndarray::Array1<f64>) -> ndarray::Array1<f64>{
-        let mut carrier = input;
-        for mut layer in self.layers {
-            carrier = &layer.forward(carrier);
-        }
-        carrier.clone()
+  fn init(layers : Vec<Layer>) -> Self {
+    NeuralNetwork {
+        layers : layers
     }
+  }
+  
+  fn forward (&mut self, input : &ndarray::Array1<f64>) -> ndarray::Array1<f64>{
+    let mut output = input.clone();
+    for layer in &mut self.layers {
+        output = layer.forward(&output);
+    }
+    output
+  }
 
-    fn backward(&mut self, loss : Loss){
-        // Compute delta for last layer
-        self.layers.last_mut().unwrap().compute_delta_final(loss);
-        // Compute delta for all other layers
-        for i in (0..self.layers.len()-1).rev() {
-            self.layers[i].compute_delta(self.layers[i+1]);
-        }
-        // Backpropagate
-        for  mut layer in self.layers {
-            layer.backprop(&0.1);
-        }
+  fn backprop (&mut self, loss: &Loss, lr : &f64){
+    let mut prev_layer = self.layers[self.layers.len() - 1].clone();
+    let size = self.layers.len();
+    self.layers[size - 1].compute_delta_final(loss);
+    self.layers[size - 1].backprop(lr);
+    for i in (0..self.layers.len() - 1).rev(){
+        self.layers[i].compute_delta(prev_layer.clone());
+        self.layers[i].backprop(lr);
+        prev_layer = self.layers[i].clone();
     }
+  }
 }
 
 impl Loss {
     fn init() -> Self {
-        Loss { derivative: ndarray::Array1::zeros(10) }
+        Loss { 
+            derivative: ndarray::Array1::zeros(10),
+            loss : 0.0 
+            }
     }
     
-    fn quadraticnn(&mut self, output : ndarray::Array1<f64>, target : ndarray::Array1<f64>) -> f64{
+    fn quadraticnn(&mut self, output : &ndarray::Array1<f64>, target : &ndarray::Array1<f64>) -> f64{
         let mut loss = 0.0;
         for i in 0..output.len(){
             loss += (output[i] - target[i]).powi(2);
         }
         //  compute derivative of loss
         self.derivative = output - target;
+        self.loss = loss;
         loss
     }
 }
 fn main () {
-    // Generate test dataset
-    let mut rng = rand::thread_rng();
-    let mut input = Array::ones(10);
-    let mut target = Array::ones(10);
-    // Initialize neural network
-    let mut nn = NeuralNetwork { layers: vec![Layer::init(10, 10), Layer::init(10, 10)] };
-    // Forward pass
-    let output = nn.forward(&input);
-    // Compute loss
+     let mut layers = Vec::new();
+    layers.push(Layer::init(784, 16));
+    layers.push(Layer::init(16, 16));
+    layers.push(Layer::init(16, 10));
+    let mut nn = NeuralNetwork::init(layers);
     let mut loss = Loss::init();
-    let loss_value = loss.quadraticnn(output, target);
-    // Backward pass
-    nn.backward(loss);
+    let mut input = ndarray::Array1::zeros(784);
+    let mut target = ndarray::Array1::zeros(10);
+    let mut output = ndarray::Array1::zeros(10);
+    let mut lr = 0.01;
+    for _ in 0..1000{
+        input = Array::ones(784);
+        target = Array::ones(10);
+        output = nn.forward(&input);
+        let loss_value = loss.quadraticnn(&output, &target);
+        nn.backprop(&loss, &lr);
+    }
+    println!("input : {:?}", input);
+    println!("target : {:?}", target);
+    println!("output : {:?}", output);
 }
